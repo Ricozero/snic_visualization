@@ -35,74 +35,19 @@
  SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include<mex.h>
 #include <cmath>
 #include <cfloat>
 #include <vector>
 #include <algorithm>
 #include <queue>
 
+#include <iostream>
+#include <opencv2/core.hpp>
+#include <opencv2/imgproc.hpp>
+
 using namespace std;
+using namespace cv;
 
-void rgbtolab(int* rin, int* gin, int* bin, int sz, double* lvec, double* avec, double* bvec)
-{
-    int i; int sR, sG, sB;
-    double R,G,B;
-    double X,Y,Z;
-    double r, g, b;
-    const double epsilon = 0.008856;	//actual CIE standard
-    const double kappa   = 903.3;		//actual CIE standard
-    
-    const double Xr = 0.950456;	//reference white
-    const double Yr = 1.0;		//reference white
-    const double Zr = 1.088754;	//reference white
-    double xr,yr,zr;
-    double fx, fy, fz;
-    double lval,aval,bval;
-    
-    for(i = 0; i < sz; i++)
-    {
-        sR = rin[i]; sG = gin[i]; sB = bin[i];
-        R = sR/255.0;
-        G = sG/255.0;
-        B = sB/255.0;
-        
-        if(R <= 0.04045)	r = R/12.92;
-        else				r = pow((R+0.055)/1.055,2.4);
-        if(G <= 0.04045)	g = G/12.92;
-        else				g = pow((G+0.055)/1.055,2.4);
-        if(B <= 0.04045)	b = B/12.92;
-        else				b = pow((B+0.055)/1.055,2.4);
-        
-        X = r*0.4124564 + g*0.3575761 + b*0.1804375;
-        Y = r*0.2126729 + g*0.7151522 + b*0.0721750;
-        Z = r*0.0193339 + g*0.1191920 + b*0.9503041;
-        
-        //------------------------
-        // XYZ to LAB conversion
-        //------------------------
-        xr = X/Xr;
-        yr = Y/Yr;
-        zr = Z/Zr;
-        
-        if(xr > epsilon)	fx = pow(xr, 1.0/3.0);
-        else				fx = (kappa*xr + 16.0)/116.0;
-        if(yr > epsilon)	fy = pow(yr, 1.0/3.0);
-        else				fy = (kappa*yr + 16.0)/116.0;
-        if(zr > epsilon)	fz = pow(zr, 1.0/3.0);
-        else				fz = (kappa*zr + 16.0)/116.0;
-        
-        lval = 116.0*fy-16.0;
-        aval = 500.0*(fx-fy);
-        bval = 200.0*(fy-fz);
-        
-        lvec[i] = lval; avec[i] = aval; bvec[i] = bval;
-    }
-}
-
-//===========================================================================
-/// FindSeeds
-//===========================================================================
 void FindSeeds(const int width, const int height, int& numk, vector<int>& kx, vector<int>& ky)
 {
     const int sz = width*height;
@@ -138,12 +83,6 @@ void FindSeeds(const int width, const int height, int& numk, vector<int>& kx, ve
     }
 }
 
-
-//===========================================================================
-/// runSNIC
-///
-/// Runs the priority queue base Simple Non-Iterative Clustering (SNIC) algo.
-//===========================================================================
 void runSNIC(
              double*		lv,
              double*		av,
@@ -277,121 +216,149 @@ void runSNIC(
     
 }
 
-void mexFunction(int nlhs, mxArray *plhs[],
-                 int nrhs, const mxArray *prhs[])
+void SNIC(Mat image)
 {
-    if (nrhs < 1) {
-        mexErrMsgTxt("At least one argument is required.") ;
-    } else if(nrhs > 3) {
-        mexErrMsgTxt("Too many input arguments.");
-    }
-    if(nlhs!=2) {
-        mexErrMsgIdAndTxt("SLIC:nlhs","Two outputs required, a labels and the number of labels, i.e superpixels.");
-    }
-    //---------------------------
-    int numelements   = mxGetNumberOfElements(prhs[0]) ;
-    mwSize numdims = mxGetNumberOfDimensions(prhs[0]) ;
-    const mwSize* dims  = mxGetDimensions(prhs[0]) ;
-    unsigned char* imgbytes  = (unsigned char*)mxGetData(prhs[0]) ;//mxGetData returns a void pointer, so cast it
-    int width = dims[1];
-    int height = dims[0];//Note: first dimension provided is height and second is width
-    int sz = width*height;
-    //---------------------------
-    const int numk = mxGetScalar(prhs[1]);
-    double compactness  = mxGetScalar(prhs[2]);
-    //---------------------------
-    // Allocate memory
-    //---------------------------
-    int* rin    = (int*)mxMalloc( sizeof(int)      * sz ) ;
-    int* gin    = (int*)mxMalloc( sizeof(int)      * sz ) ;
-    int* bin    = (int*)mxMalloc( sizeof(int)      * sz ) ;
-    double* lvec    = (double*)mxMalloc( sizeof(double)      * sz ) ;
-    double* avec    = (double*)mxMalloc( sizeof(double)      * sz ) ;
-    double* bvec    = (double*)mxMalloc( sizeof(double)      * sz ) ;
-    int* klabels = (int*)mxMalloc( sizeof(int)         * sz );//original k-means labels
-    //---------------------------
-    // Perform color conversion
-    //---------------------------
-    //if(2 == numdims)
-    if(numelements/sz == 1)//if it is a grayscale image, copy the values directly into the lab vectors
+    Mat image_lab;
+    cvtColor(image, image_lab, COLOR_BGR2Lab);
+    cout << image_lab.type();
+    image_lab.convertTo(image_lab, CV_64F);
+    cout << image_lab.type();
+    int sz = image.rows * image.cols;
+    double *lvec = new double[sz];
+    double *avec = new double[sz];
+    double *bvec = new double[sz];
+    int *labels = new int[sz];
+    int i, j, t = 0;
+    for(i = 0; i < image.rows; i++)
     {
-        for(int x = 0, ii = 0; x < width; x++)//reading data from column-major MATLAB matrics to row-major C matrices (i.e perform transpose)
+        for(j = 0; j < image.cols; j++)
         {
-            for(int y = 0; y < height; y++)
-            {
-                int i = y*width+x;
-                lvec[i] = imgbytes[ii];
-                avec[i] = imgbytes[ii];
-                bvec[i] = imgbytes[ii];
-                ii++;
-            }
+            lvec[t] = image_lab.at<double>(i, j, 0);
+            avec[t] = image_lab.at<double>(i, j, 1);
+            bvec[t] = image_lab.at<double>(i, j, 2);
+            t++;
         }
     }
-    else//else covert from rgb to lab
-    {
-        if(1)//convert from rgb to cielab space
-        {
-            for(int x = 0, ii = 0; x < width; x++)//reading data from column-major MATLAB matrics to row-major C matrices (i.e perform transpose)
-            {
-                for(int y = 0; y < height; y++)
-                {
-                    int i = y*width+x;
-                    rin[i] = imgbytes[ii];
-                    gin[i] = imgbytes[ii+sz];
-                    bin[i] = imgbytes[ii+sz+sz];
-                    ii++;
-                }
-            }
-            rgbtolab(rin,gin,bin,sz,lvec,avec,bvec);
-        }
-        else//else use rgb values directly
-        {
-            for(int x = 0, ii = 0; x < width; x++)//reading data from column-major MATLAB matrics to row-major C matrices (i.e perform transpose)
-            {
-                for(int y = 0; y < height; y++)
-                {
-                    int i = y*width+x;
-                    lvec[i] = imgbytes[ii];
-                    avec[i] = imgbytes[ii+sz];
-                    bvec[i] = imgbytes[ii+sz+sz];
-                    ii++;
-                }
-            }
-        }
-    }
-    //---------------------------
-    // Compute superpixels
-    //---------------------------
-    int numklabels = 0;
-    runSNIC(lvec,avec,bvec,width,height,klabels,&numklabels,numk,compactness);
-    //---------------------------
-    // Assign output labels
-    //---------------------------
-    plhs[0] = mxCreateNumericMatrix(height,width,mxINT32_CLASS,mxREAL);
-    int* outlabels = (int*)mxGetData(plhs[0]);
-    for(int x = 0, ii = 0; x < width; x++)//copying data from row-major C matrix to column-major MATLAB matrix (i.e. perform transpose)
-    {
-        for(int y = 0; y < height; y++)
-        {
-            int i = y*width+x;
-            outlabels[ii] = klabels[i];
-            ii++;
-        }
-    }
-    //---------------------------
-    // Assign number of labels/seeds
-    //---------------------------
-    plhs[1] = mxCreateNumericMatrix(1,1,mxINT32_CLASS,mxREAL);
-    int* outputNumSuperpixels = (int*)mxGetData(plhs[1]);//gives a void*, cast it to int*
-    *outputNumSuperpixels = numklabels;
-    //---------------------------
-    // Deallocate memory
-    //---------------------------
-    mxFree(rin);
-    mxFree(gin);
-    mxFree(bin);
-    mxFree(lvec);
-    mxFree(avec);
-    mxFree(bvec);
-    mxFree(klabels);
+
+    // TODO
+    runSNIC(lvec, avec, bvec, image.cols, image.rows, labels, outnumk, innumk, compactness);
 }
+
+//void mexFunction(int nlhs, mxArray *plhs[],
+//                 int nrhs, const mxArray *prhs[])
+//{
+//    if (nrhs < 1) {
+//        mexErrMsgTxt("At least one argument is required.") ;
+//    } else if(nrhs > 3) {
+//        mexErrMsgTxt("Too many input arguments.");
+//    }
+//    if(nlhs!=2) {
+//        mexErrMsgIdAndTxt("SLIC:nlhs","Two outputs required, a labels and the number of labels, i.e superpixels.");
+//    }
+//    //---------------------------
+//    int numelements   = mxGetNumberOfElements(prhs[0]) ;
+//    mwSize numdims = mxGetNumberOfDimensions(prhs[0]) ;
+//    const mwSize* dims  = mxGetDimensions(prhs[0]) ;
+//    unsigned char* imgbytes  = (unsigned char*)mxGetData(prhs[0]) ;//mxGetData returns a void pointer, so cast it
+//    int width = dims[1];
+//    int height = dims[0];//Note: first dimension provided is height and second is width
+//    int sz = width*height;
+//    //---------------------------
+//    const int numk = mxGetScalar(prhs[1]);
+//    double compactness  = mxGetScalar(prhs[2]);
+//    //---------------------------
+//    // Allocate memory
+//    //---------------------------
+//    int* rin    = (int*)mxMalloc( sizeof(int)      * sz ) ;
+//    int* gin    = (int*)mxMalloc( sizeof(int)      * sz ) ;
+//    int* bin    = (int*)mxMalloc( sizeof(int)      * sz ) ;
+//    double* lvec    = (double*)mxMalloc( sizeof(double)      * sz ) ;
+//    double* avec    = (double*)mxMalloc( sizeof(double)      * sz ) ;
+//    double* bvec    = (double*)mxMalloc( sizeof(double)      * sz ) ;
+//    int* klabels = (int*)mxMalloc( sizeof(int)         * sz );//original k-means labels
+//    //---------------------------
+//    // Perform color conversion
+//    //---------------------------
+//    //if(2 == numdims)
+//    if(numelements/sz == 1)//if it is a grayscale image, copy the values directly into the lab vectors
+//    {
+//        for(int x = 0, ii = 0; x < width; x++)//reading data from column-major MATLAB matrics to row-major C matrices (i.e perform transpose)
+//        {
+//            for(int y = 0; y < height; y++)
+//            {
+//                int i = y*width+x;
+//                lvec[i] = imgbytes[ii];
+//                avec[i] = imgbytes[ii];
+//                bvec[i] = imgbytes[ii];
+//                ii++;
+//            }
+//        }
+//    }
+//    else//else covert from 
+//            for(int x = 0, ii = 0; x < width; x++)//reading data from column-major MATLAB matrics to row-major C matrices (i.e perform transpose)
+//            {
+//                for(int y = 0; y <rgb to lab
+//    {
+//        if(1)//convert from rgb to cielab space
+//        {;
+//                    rin[i] = imgbytes[ii];
+//                    gin[i] = imgbytes[ii height; y++)
+//                {
+//                    int i = y*width+x+sz];
+//                    bin[i] = imgbytes[ii+sz+sz];
+//                    ii++;
+//                }
+//            }
+//            rgbtolab(rin,gin,bin,sz,lvec,avec,bvec);
+//        }
+//        else//else use rgb values directly
+//        {
+//            for(int x = 0, ii = 0; x < width; x++)//reading data from column-major MATLAB matrics to row-major C matrices (i.e perform transpose)
+//            {
+//                for(int y = 0; y < height; y++)
+//                {
+//                    int i = y*width+x;
+//                    lvec[i] = imgbytes[ii];
+//                    avec[i] = imgbytes[ii+sz];
+//                    bvec[i] = imgbytes[ii+sz+sz];
+//                    ii++;
+//                }
+//            }
+//        }
+//    }
+//    //---------------------------
+//    // Compute superpixels
+//    //---------------------------
+//    int numklabels = 0;
+//    runSNIC(lvec,avec,bvec,width,height,klabels,&numklabels,numk,compactness);
+//    //---------------------------
+//    // Assign output labels
+//    //---------------------------
+//    plhs[0] = mxCreateNumericMatrix(height,width,mxINT32_CLASS,mxREAL);
+//    int* outlabels = (int*)mxGetData(plhs[0]);
+//    for(int x = 0, ii = 0; x < width; x++)//copying data from row-major C matrix to column-major MATLAB matrix (i.e. perform transpose)
+//    {
+//        for(int y = 0; y < height; y++)
+//        {
+//            int i = y*width+x;
+//            outlabels[ii] = klabels[i];
+//            ii++;
+//        }
+//    }
+//    //---------------------------
+//    // Assign number of labels/seeds
+//    //---------------------------
+//    plhs[1] = mxCreateNumericMatrix(1,1,mxINT32_CLASS,mxREAL);
+//    int* outputNumSuperpixels = (int*)mxGetData(plhs[1]);//gives a void*, cast it to int*
+//    *outputNumSuperpixels = numklabels;
+//    //---------------------------
+//    // Deallocate memory
+//    //---------------------------
+//    mxFree(rin);
+//    mxFree(gin);
+//    mxFree(bin);
+//    mxFree(lvec);
+//    mxFree(avec);
+//    mxFree(bvec);
+//    mxFree(klabels);
+//}
