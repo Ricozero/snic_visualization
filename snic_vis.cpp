@@ -240,7 +240,7 @@ void SNIC(Mat image)
         }
     }
 
-    // TODO
+    // TODO not implemented
     runSNIC(lvec, avec, bvec, image.cols, image.rows, labels, outnumk, innumk, compactness);
 }
 

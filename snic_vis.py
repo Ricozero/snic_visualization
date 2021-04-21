@@ -5,6 +5,8 @@ import heapq
 import matplotlib.pyplot as plt
 from skimage.segmentation import mark_boundaries
 import time
+from scipy.io import savemat
+# TODO: time cal.
 
 #%% Functions
 def find_seeds(width, height, numk):
@@ -63,7 +65,7 @@ def snic(img, numk, compactness):
                     spacedist = sum(dist[3:5])
                     slicdist = (colordist + spacedist * invwt) / (ks[k] * ks[k])
                     heapq.heappush(heap, (slicdist, k, ii, jj))
-    return labels, numk, records
+    return labels, records # TODO: records
 
 #%% Visualization
 def show_seeds(img, numk):
@@ -77,13 +79,16 @@ def show_seeds(img, numk):
     plt.show()
     print(seeds)
 
-#%% Execution
-if __name__ =='__main__':
-    img_path='example.jpg'
-    img = cv2.imread(img_path)
-    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    img_lab = cv2.cvtColor(img, cv2.COLOR_RGB2LAB)
-    labels, numk, records = snic(img_lab, 200, 10)
+def show_bounaries(img, labels):
     bounds = mark_boundaries(img, labels, mode="inner")
     plt.imshow(bounds)
     plt.show()
+
+#%% Execution
+if __name__ =='__main__':
+    img_path = 'example.jpg'
+    img = cv2.imread(img_path)
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    img_lab = cv2.cvtColor(img, cv2.COLOR_RGB2LAB)
+    labels, records = snic(img_lab, 200, 20)
+    savemat('matlab/reimpl_labels.mat', {"reimpl_labels":labels})
