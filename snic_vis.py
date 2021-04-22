@@ -4,11 +4,10 @@ import cv2
 import heapq
 import matplotlib.pyplot as plt
 from skimage.segmentation import mark_boundaries
-import time
+from time import time
 from scipy.io import savemat
-# TODO: time cal.
 
-#%% Functions
+#%% Core Functions
 def find_seeds(width, height, numk):
     sz = width * height
     gridstep = int(np.sqrt(sz / numk) + 0.5)
@@ -25,6 +24,12 @@ def find_seeds(width, height, numk):
     return numk_new, seeds
 
 def snic(img, numk, compactness):
+    # heap log (d, k, i, j, pop(0)/push(1))
+    f = open('snic.log', 'w')
+
+    # reduce range of lightness, or else boundaries would be wavy
+    img[:,:,0] = img[:,:,0] * 100 / 255
+
     # constants
     h = img.shape[0]
     w = img.shape[1]
@@ -40,14 +45,14 @@ def snic(img, numk, compactness):
     kf = np.zeros((numk, 5), np.double)     # sp features: l,a,b,i,j
     ks = np.zeros(numk, np.int)             # sp sizes
     heap = []
-    records = []
 
     for k in range(numk):
         heap.append((0, k, seeds[k, 0], seeds[k, 1]))
     heapq.heapify(heap)
     while len(heap) > 0:
         d, k, i, j = heapq.heappop(heap)
-        if labels[i, j] < 0: # TODO: can be removed?
+        f.write('%.3f,%d,%d,%d,%d\n' % (d, k, i, j, 0))
+        if labels[i, j] < 0: # takes longer time if removed
             labels[i, j] = k
             l, a, b = img[i, j, :].tolist()
             kf[k, :] += l, a, b, i, j
@@ -65,9 +70,11 @@ def snic(img, numk, compactness):
                     spacedist = sum(dist[3:5])
                     slicdist = (colordist + spacedist * invwt) / (ks[k] * ks[k])
                     heapq.heappush(heap, (slicdist, k, ii, jj))
-    return labels, records # TODO: records
+                    f.write('%.3f,%d,%d,%d,%d\n' % (slicdist, k, ii, jj, 1))
+    f.close()
+    return labels
 
-#%% Visualization
+#%% Visualization Functions
 def show_seeds(img, numk):
     h = img.shape[0]
     w = img.shape[1]
@@ -84,11 +91,24 @@ def show_bounaries(img, labels):
     plt.imshow(bounds)
     plt.show()
 
-#%% Execution
-if __name__ =='__main__':
-    img_path = 'example.jpg'
-    img = cv2.imread(img_path)
+#%% Testing
+def export_labels_mat():
+    img = cv2.imread('example.jpg')
     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     img_lab = cv2.cvtColor(img, cv2.COLOR_RGB2LAB)
-    labels, records = snic(img_lab, 200, 20)
+    labels = snic(img_lab, 200, 20)
     savemat('matlab/reimpl_labels.mat', {"reimpl_labels":labels})
+
+def test():
+    img = cv2.imread('example.jpg')
+    print('%dx%d' % (img.shape[0], img.shape[1]))
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    img_lab = cv2.cvtColor(img, cv2.COLOR_RGB2LAB)
+    t0 = time()
+    labels = snic(img_lab, 200, 20)
+    print('Time used: %.3fs' %(time() - t0))
+    show_bounaries(img, labels)
+
+if __name__ =='__main__':
+    export_labels_mat()
+    # TODO: visualize algorithm process

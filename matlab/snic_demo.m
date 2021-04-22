@@ -33,6 +33,7 @@ tic;
 numsuperpixels = 200;
 compactness = 20.0;
 [labels, numlabels] = snic_mex(img,numsuperpixels,compactness);
+save('labels.mat', 'labels')
 %-------------------------------------------------
 timetaken = toc;
 disp(num2str(timetaken));

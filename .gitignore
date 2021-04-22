@@ -3,3 +3,4 @@
 *.mat
 *.mexw64
 *.pdb
+*.log
