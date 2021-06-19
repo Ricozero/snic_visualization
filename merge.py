@@ -1,7 +1,10 @@
 import time
 import cv2
 import numpy as np
+
+import utils
 import snic
+
 
 DMAX = np.inf
 
@@ -93,7 +96,7 @@ def choose_neighbor(a, b, c):
     measure += a
     return np.argmin(measure)
 
-def merge_superpixel(sp_labels, sp_feature, img_gradmag, percentage=0.8, save_turns=False):
+def merge_superpixel(sp_labels, sp_feature, img_gradmag, percentage, save_turns=False):
     Ma, Mb, Mc = superpixel_adjacency_matrix(sp_labels, sp_feature, img_gradmag)
     n_sp = Ma.shape[0]
     # Merge state, indicates a sp is merged with which sp or not
@@ -151,7 +154,7 @@ def merge_superpixel(sp_labels, sp_feature, img_gradmag, percentage=0.8, save_tu
         count_sum += count
         if save_turns:
             ms_turns.append(ms.copy())
-        print('Turn %d: %d' % (turn, count))
+        #print('Turn %d: %d' % (turn, count))
         if count_sum / n_sp > percentage:
             break
 
@@ -197,20 +200,27 @@ def merge_superpixel(sp_labels, sp_feature, img_gradmag, percentage=0.8, save_tu
 
     return msp_labels
 
+def merge(img, sp_labels, percentage=0.8):
+    img_gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+    img_gradmag = get_gradmag(img_gray)
+    sp_feature = get_rgb_histogram(img, sp_labels)
+    msp_labels = merge_superpixel(sp_labels, sp_feature, img_gradmag, percentage)
+    return msp_labels
+
+
 if __name__ == "__main__":
     img_path = 'bee.jpg'
     img = cv2.imread(img_path)
     #img = img[:, 200:]
     print('%dx%d' % (img.shape[0], img.shape[1]))
     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    img_lab = cv2.cvtColor(img, cv2.COLOR_RGB2LAB)
     img_hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
     img_gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
     img_gradmag = get_gradmag(img_gray)
 
     t = []
     t.append(time.time())
-    sp_labels = snic.snico(img_lab, 200)
+    sp_labels = snic.snico(img, 200)
     t.append(time.time())
     #sp_feature = get_hsv_histogram(img_hsv, sp_labels)
     #sp_feature = get_rgb_average(img, sp_labels)
@@ -225,8 +235,8 @@ if __name__ == "__main__":
         for i in range(1, len(t)):
             print('%.2f' % (t[i] - t[i - 1]), end=' ')
         print()
-        snic.show_bounaries(img, sp_labels)
-        snic.show_bounaries(img, msp_labels)
+        utils.show_bounaries(img, sp_labels)
+        utils.show_bounaries(img, msp_labels)
     else:
         msp_labels_list = merge_superpixel(sp_labels, sp_feature, img_gradmag, save_turns=True)
         t.append(time.time())
@@ -234,4 +244,4 @@ if __name__ == "__main__":
             print('%.2f' % (t[i] - t[i - 1]), end=' ')
         print()
         for i, msp_labels in enumerate(msp_labels_list):
-            snic.show_bounaries(img, msp_labels)
+            utils.show_bounaries(img, msp_labels)
