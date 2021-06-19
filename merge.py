@@ -5,6 +5,12 @@ import snic
 
 DMAX = np.inf
 
+def get_gradmag(img_gray):
+    gradx = cv2.Sobel(img_gray, cv2.CV_64F, 1, 0, ksize=7)
+    grady = cv2.Sobel(img_gray, cv2.CV_64F, 0, 1, ksize=7)
+    gradmag = cv2.magnitude(gradx, grady) / 255
+    return gradmag
+
 def get_hsv_histogram(img_hsv, sp_labels):
     n_sp = sp_labels.max() + 1
     sp_pcs = np.zeros((n_sp, 1), dtype=np.uint16)
@@ -42,13 +48,17 @@ def get_rgb_average(img, sp_labels):
             sp_rgb_sums[sp_idx] += img[row][col]
     return sp_rgb_sums / sp_pcs
 
-def distance(avec, bvec):
+def euler_distance(avec, bvec):
     return np.sum(np.sqrt(np.abs(avec - bvec)))
 
-def superpixel_adjacency_matrix(sp_labels, sp_feature):
+def superpixel_adjacency_matrix(sp_labels, sp_feature, img_gradmag):
     n_sp = sp_labels.max() + 1
     # Stores dissimilarity
     Ma = DMAX * np.ones((n_sp, n_sp), np.float)
+    # Stores border information
+    Mb = np.zeros((n_sp, n_sp), np.float)
+    # Stores border pixel count
+    Mc = np.zeros((n_sp, n_sp), np.int)
     # Consider adjacency in four directions
     # Ignore bottom right pixel
     for i in range(sp_labels.shape[0] - 1):
@@ -57,16 +67,34 @@ def superpixel_adjacency_matrix(sp_labels, sp_feature):
             r = sp_labels[i, j + 1] # Right
             d = sp_labels[i + 1, j] # Down
             # Horizontal
-            if c != r and Ma[c, r] == DMAX:
-                Ma[c, r] = Ma[r, c] = distance(sp_feature[c, :], sp_feature[r, :])
+            if c != r:
+                if Ma[c, r] == DMAX:
+                    Ma[c, r] = Ma[r, c] = euler_distance(sp_feature[c, :], sp_feature[r, :])
+                Mb[c, r] += img_gradmag[i, j]
+                Mb[r, c] += img_gradmag[i, j]
+                Mc[c, r] += 1
+                Mc[r, c] += 1
             # Vertical
-            if c != d and Ma[c, d] == DMAX:
-                Ma[c, d] = Ma[d, c] = distance(sp_feature[c, :], sp_feature[d, :])
-    return Ma
+            if c != d:
+                if Ma[c, d] == DMAX:
+                    Ma[c, d] = Ma[d, c] = euler_distance(sp_feature[c, :], sp_feature[d, :])
+                Mb[c, d] += img_gradmag[i, j]
+                Mb[d, c] += img_gradmag[i, j]
+                Mc[c, d] += 1
+                Mc[d, c] += 1
+    return Ma, Mb, Mc
 
-def merge_superpixel(sp_labels, sp_feature, percentage=0.88, save_turns=False):
-    Ma = superpixel_adjacency_matrix(sp_labels, sp_feature)
-    sp_feature_tmp = sp_feature.copy()
+def choose_neighbor(a, b, c):
+    # Normalize border gradient
+    with np.errstate(divide='ignore', invalid='ignore'):
+        measure = b / c
+    measure[np.isnan(measure)] = 0
+    # Fuse border gradient and color distance
+    measure += a
+    return np.argmin(measure)
+
+def merge_superpixel(sp_labels, sp_feature, img_gradmag, percentage=0.8, save_turns=False):
+    Ma, Mb, Mc = superpixel_adjacency_matrix(sp_labels, sp_feature, img_gradmag)
     n_sp = Ma.shape[0]
     # Merge state, indicates a sp is merged with which sp or not
     # Make sure ms[i] <= i
@@ -89,26 +117,35 @@ def merge_superpixel(sp_labels, sp_feature, percentage=0.88, save_turns=False):
         turn += 1
         count = 0
         for i in range(n_sp):
-            # Merged
+            # Merged already, skip
             if ms[i] < i:
                 continue
             # The nearest sp's index
             # Only choose from larger index to avoid repeating
             # Only possible to choose the first sp's index of a merged region,
             # because other merged sp's distances are marked DMAX
-            ind = i + np.argmin(Ma[i, i:])
+            ind = i + choose_neighbor(Ma[i, i:], Mb[i, i:], Mc[i, i:])
             # Two sps form a loop
-            if Ma[i, ind] < DMAX and np.argmin(Ma[ind, :ind]) == i:
+            if Ma[i, ind] < DMAX and choose_neighbor(Ma[ind, :ind], Mb[ind, :ind], Mc[ind, :ind]) == i:
                 # Latter sp merges with former sp
                 ms[ind] = i
                 # Use weighed average to update merged sp's feature
-                sp_feature_tmp[i, :] = (sp_feature_tmp[i, :] * sp_pcs[i] + sp_feature_tmp[ind, :] * sp_pcs[ind]) / (sp_pcs[i] + sp_pcs[ind])
-                # Update the ith sp's neighbors
+                sp_feature[i, :] = (sp_feature[i, :] * sp_pcs[i] + sp_feature[ind, :] * sp_pcs[ind]) / (sp_pcs[i] + sp_pcs[ind])
+                # Update the ith sp's adjecncy
                 for j in range(n_sp):
                     if (Ma[i, j] < DMAX or Ma[ind, j] < DMAX) and j != i and j != ind:
-                        Ma[i, j] = Ma[j, i] = distance(sp_feature_tmp[i, :], sp_feature_tmp[j, :])
+                        Ma[i, j] = Ma[j, i] = euler_distance(sp_feature[i, :], sp_feature[j, :])
+                Mb[i, ind] = Mb[ind, i] = 0
+                Mb[i, :] = Mb[i, :] + Mb[ind, :]
+                Mb[:, i] = Mb[:, i] + Mb[:, ind]
+                Mc[i, ind] = Mc[ind, i] = 0
+                Mc[i, :] = Mc[i, :] + Mc[ind, :]
+                Mc[:, i] = Mc[:, i] + Mc[:, ind]
                 # Clear merged sp's neighbors
                 Ma[:, ind] = Ma[ind, :] = DMAX
+                Mb[:, ind] = Mb[ind, :] = 0
+                Mc[:, ind] = Mc[ind, :] = 0
+                # State update
                 flag = True
                 count += 1
         count_sum += count
@@ -118,6 +155,7 @@ def merge_superpixel(sp_labels, sp_feature, percentage=0.88, save_turns=False):
         if count_sum / n_sp > percentage:
             break
 
+    # Intermediate results
     if save_turns:
         for m in ms_turns:
             for i in range(n_sp):
@@ -143,17 +181,13 @@ def merge_superpixel(sp_labels, sp_feature, percentage=0.88, save_turns=False):
         ms[i] = k
 
     # Rename sps to make the indices continuous
-    # Reconstruct feature list at the same time
     cur = 0
-    msp_feature = np.zeros_like(sp_feature)
     for i in range(n_sp):
         if ms[i] == i:
             ms[i] = cur
-            msp_feature[cur, :] = sp_feature_tmp[i, :]
             cur += 1
         else:
             ms[i] = ms[ms[i]]
-    msp_feature = msp_feature[:cur, :]
 
     # Create a merged superpixel label map
     msp_labels = np.zeros_like(sp_labels)
@@ -164,17 +198,19 @@ def merge_superpixel(sp_labels, sp_feature, percentage=0.88, save_turns=False):
     return msp_labels
 
 if __name__ == "__main__":
-    img_path = 'j20.jpg'
+    img_path = 'bee.jpg'
     img = cv2.imread(img_path)
     #img = img[:, 200:]
     print('%dx%d' % (img.shape[0], img.shape[1]))
     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     img_lab = cv2.cvtColor(img, cv2.COLOR_RGB2LAB)
     img_hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    img_gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+    img_gradmag = get_gradmag(img_gray)
 
     t = []
     t.append(time.time())
-    sp_labels = snic.snico(img_lab, 100)
+    sp_labels = snic.snico(img_lab, 200)
     t.append(time.time())
     #sp_feature = get_hsv_histogram(img_hsv, sp_labels)
     #sp_feature = get_rgb_average(img, sp_labels)
@@ -184,15 +220,18 @@ if __name__ == "__main__":
 
     no_turns = True
     if no_turns:
-        msp_labels = merge_superpixel(sp_labels, sp_feature, percentage=0.85)
+        msp_labels = merge_superpixel(sp_labels, sp_feature, img_gradmag, percentage=0.95)
         t.append(time.time())
         for i in range(1, len(t)):
             print('%.2f' % (t[i] - t[i - 1]), end=' ')
+        print()
+        snic.show_bounaries(img, sp_labels)
         snic.show_bounaries(img, msp_labels)
     else:
-        msp_labels_list = merge_superpixel(sp_labels, sp_feature, save_turns=True)
+        msp_labels_list = merge_superpixel(sp_labels, sp_feature, img_gradmag, save_turns=True)
         t.append(time.time())
         for i in range(1, len(t)):
             print('%.2f' % (t[i] - t[i - 1]), end=' ')
+        print()
         for i, msp_labels in enumerate(msp_labels_list):
             snic.show_bounaries(img, msp_labels)
