@@ -87,7 +87,7 @@ def snico(img, numk):
     dj = [0, -1, 0, 1, -1, -1, 1, 1]
     connectivity = 4
     area = h * w / numk
-    DC = 20 # default compactness
+    DCN = 20 # default color nomalization factor
 
     maxcdsq = np.zeros(numk) # max color distances squared
     for iter in range(2):
@@ -117,11 +117,11 @@ def snico(img, numk):
                         colordist = sum(dist[0:3])
                         spacedist = sum(dist[3:5])
                         if iter == 0:
-                            slicdist = colordist + DC * DC * spacedist / area
+                            slicdist = colordist / DCN / DCN + spacedist / area
                             if maxcdsq[k] < colordist:
                                 maxcdsq[k] = colordist
                         else:
-                            slicdist = colordist + maxcdsq[k] * spacedist / area
+                            slicdist = colordist / maxcdsq[k] + spacedist / area
                         heapq.heappush(heap, (slicdist, k, ii, jj))
     return labels
 
@@ -151,7 +151,7 @@ def export_labels_mat():
     savemat('matlab/reimpl_labels.mat', {"reimpl_labels":labels})
 
 def test(zero_param=False):
-    img = cv2.imread('bee.jpg')
+    img = cv2.imread('j20.jpg')
     #img = img[0:100,0:100]
     print('%dx%d' % (img.shape[0], img.shape[1]))
     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
